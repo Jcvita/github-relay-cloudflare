@@ -1,0 +1,6 @@
+{
+    "rust-analyzer.linkedProjects": [
+        "gitea-notifier/Cargo.toml",
+        "githook-relay-worker/Cargo.toml"
+    ]
+}
