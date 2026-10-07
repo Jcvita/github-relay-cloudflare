@@ -1,4 +1,12 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+#[derive(Debug, Deserialize)]
+pub struct GithubPingPayload {
+    pub zen: Option<String>,
+    pub hook_id: Option<u64>,
+    pub hook: Option<Map<String, Value>>,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GithubPushPayload {
@@ -64,9 +72,28 @@ pub struct PushInstallation {
     pub id: u64,
 }
 
+pub enum GithubWebhookPayload {
+    Push(GithubPushPayload),
+    Ping(GithubPingPayload),
+}
+
 #[cfg(test)]
 mod tests {
-    use super::GithubPushPayload;
+    use super::{GithubPingPayload, GithubPushPayload};
+
+    #[test]
+    fn parses_ping_payload() {
+        let payload = r#"{"zen":"Keep it simple.","hook_id":123,"hook":{"id":123,"type":"Repository"},"repository":{"full_name":"owner/repo"}}"#;
+        let ping: GithubPingPayload = serde_json::from_str(payload).unwrap();
+        assert_eq!(ping.zen.as_deref(), Some("Keep it simple."));
+        assert_eq!(ping.hook_id, Some(123));
+        assert_eq!(ping.hook.unwrap()["type"], "Repository");
+
+        let ping: GithubPingPayload = serde_json::from_str(r#"{"zen":"Keep it simple."}"#).unwrap();
+        assert_eq!(ping.zen.as_deref(), Some("Keep it simple."));
+        assert!(ping.hook_id.is_none());
+        assert!(serde_json::from_str::<GithubPingPayload>(r#"{"hook_id":"invalid"}"#).is_err());
+    }
 
     #[test]
     fn parses_push_and_deleted_ref() {

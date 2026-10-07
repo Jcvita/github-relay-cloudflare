@@ -181,13 +181,21 @@ dependencies = [
 name = "githook-relay-worker"
 version = "0.1.0"
 dependencies = [
+ "github-webhooks-structs",
  "hex",
  "hmac",
- "serde",
  "serde_json",
  "sha2",
  "subtle",
  "worker",
+]
+
+[[package]]
+name = "github-webhooks-structs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

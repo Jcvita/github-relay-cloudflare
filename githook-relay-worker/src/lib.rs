@@ -2,7 +2,8 @@ use subtle::ConstantTimeEq;
 use worker::*;
 
 pub mod github_webhook;
-use github_webhook::{GithubWebhookPayload, GithubWebhookRequestValidator};
+use github_webhook::GithubWebhookRequestValidator;
+use github_webhooks_structs::GithubWebhookPayload;
 
 const PUSH_WEBHOOK_PATH: &str = "/webhooks/github/push";
 const WEBSOCKET_PATH: &str = "/relay/ws";

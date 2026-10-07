@@ -1,18 +1,9 @@
+use github_webhooks_structs::GithubWebhookPayload;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use worker::Request;
 
-pub mod ping;
-pub mod push;
-use ping::GithubPingPayload;
-use push::GithubPushPayload;
-
 type ValidationError = (u16, &'static str);
-
-pub enum GithubWebhookPayload {
-    Push(GithubPushPayload),
-    Ping(GithubPingPayload),
-}
 
 #[derive(Debug, Clone)]
 pub struct GithubWebhookRequestValidator {

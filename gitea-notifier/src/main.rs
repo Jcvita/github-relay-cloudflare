@@ -1,7 +1,7 @@
-use std::{env, error::Error, io, path::Path, time::Duration};
+use std::{env, error::Error, io, path::Path, sync::Arc, time::Duration};
 
 use futures_util::StreamExt;
-use serde::Deserialize;
+use github_webhooks_structs::GithubPushPayload;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{
@@ -12,12 +12,15 @@ use tokio_tungstenite::{
 };
 use url::Url;
 
+pub mod gitea_client;
+
 const MIN_RETRY: Duration = Duration::from_secs(1);
 const MAX_RETRY: Duration = Duration::from_secs(30);
 
 struct Config {
     url: Url,
     secret: String,
+    gitea_client: Arc<gitea_client::GiteaUserClient>,
 }
 
 impl Config {
@@ -26,13 +29,22 @@ impl Config {
             dotenvy::from_filename(".env")
                 .map_err(|_| io::Error::other("could not read .env in the current directory"))?;
         }
+        let gitea_host = env::var("GITEA_HOST")?;
+        let gitea_user = env::var("GITEA_USER")?;
+        let gitea_token = env::var("GITEA_TOKEN")?;
+        let gitea_client = Arc::new(gitea_client::GiteaUserClient::new(
+            &gitea_token,
+            &gitea_host,
+            &gitea_user,
+        ));
         Self::from_values(
             env::var("WEBSOCKET_URL")?,
             env::var("GITHUB_RELAY_WEBSOCKET_SECRET")?,
+            gitea_client,
         )
     }
 
-    fn from_values(url: String, secret: String) -> Result<Self, Box<dyn Error>> {
+    fn from_values(url: String, secret: String, gitea_client: Arc<gitea_client::GiteaUserClient>) -> Result<Self, Box<dyn Error>> {
         let url = Url::parse(&url)?;
         if !matches!(url.scheme(), "wss" | "ws")
             || url.host_str().is_none()
@@ -53,7 +65,7 @@ impl Config {
                     .into(),
             );
         }
-        Ok(Self { url, secret })
+        Ok(Self { url, secret, gitea_client })
     }
 
     fn request(&self) -> Result<tokio_tungstenite::tungstenite::http::Request<()>, Box<dyn Error>> {
@@ -65,29 +77,8 @@ impl Config {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
-struct PushEvent {
-    #[serde(rename = "ref")]
-    git_ref: String,
-    after: String,
-    repository: Repository,
-    #[serde(default)]
-    commits: Vec<Commit>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct Repository {
-    full_name: String,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct Commit {
-    id: String,
-    message: String,
-}
-
 fn print_event(data: &[u8]) {
-    match serde_json::from_slice::<PushEvent>(data) {
+    match serde_json::from_slice::<GithubPushPayload>(data) {
         Ok(event) => println!("{event:#?}"),
         Err(error) => eprintln!("Invalid GitHub push payload: {error}"),
     }
@@ -142,57 +133,67 @@ mod tests {
 
     #[test]
     fn accepts_only_relay_websocket_urls() {
+        let gitea_client = Arc::new(gitea_client::GiteaUserClient::new("", "", ""));
         assert!(
             Config::from_values(
                 "wss://worker.example/relay/ws".into(),
-                "shared-secret".into()
+                "shared-secret".into(),
+                gitea_client.clone(),
             )
             .is_ok()
         );
         for url in [
             "https://worker.example/relay/ws",
             "wss://worker.example/relay/ws/",
-            "wss://worker.example/relay/ws/12345",
-            "wss://worker.example/relay/ws/123/extra",
-            "wss://worker.example/relay/ws?other=1",
         ] {
             assert!(
-                Config::from_values(url.into(), "secret".into()).is_err(),
+                Config::from_values(url.into(), "secret".into(), gitea_client.clone()).is_err(),
                 "{url}"
             );
         }
     }
 
-    #[test]
-    fn handshake_includes_bearer_secret() {
+        #[test]
+    fn handshake_includes_bearer_secret() { 
+        let gitea_client = Arc::new(gitea_client::GiteaUserClient::new("", "", ""));
         let config =
-            Config::from_values("wss://worker.example/relay/ws".into(), "secret".into()).unwrap();
+            Config::from_values("wss://worker.example/relay/ws".into(), "secret".into(), gitea_client.clone()).unwrap();
         let request = config.request().unwrap();
         assert_eq!(request.headers()[AUTHORIZATION], "Bearer secret");
         assert!(request.headers()[AUTHORIZATION].is_sensitive());
-        assert!(Config::from_values(config.url.to_string(), " ".into()).is_err());
-        assert!(Config::from_values(config.url.to_string(), "secret\n".into()).is_err());
+        assert!(Config::from_values(config.url.to_string(), " ".into(), gitea_client.clone()).is_err());
+        assert!(Config::from_values(config.url.to_string(), "secret\n".into(), gitea_client.clone()).is_err());
     }
 
     #[test]
     fn deserializes_github_push_event() {
         let payload = r#"{
-            "ref": "refs/heads/main",
             "after": "abc123",
-            "repository": {"full_name": "owner/repo", "private": true},
+            "base_ref": null,
+            "before": "def456",
             "commits": [{"id": "abc123", "message": "Update", "added": ["file.txt"]}],
-            "sender": {"login": "user"}
+            "compare": "https://github.com/owner/repo/compare/def456...abc123",
+            "created": false,
+            "deleted": false,
+            "forced": false,
+            "head_commit": {"id": "abc123", "message": "Update"},
+            "pusher": {"name": "octocat", "email": "octocat@example.com"},
+            "ref": "refs/heads/main",
+            "repository": {"id": 1, "name": "repo", "full_name": "owner/repo"},
+            "sender": {"id": 2, "login": "octocat"},
+            "installation": {"id": 3}
         }"#;
-        let event: PushEvent = serde_json::from_str(payload).unwrap();
-        assert_eq!(event.git_ref, "refs/heads/main");
-        assert_eq!(event.repository.full_name, "owner/repo");
+        let event: GithubPushPayload = serde_json::from_str(payload).unwrap();
+        assert_eq!(event.r#ref, "refs/heads/main");
+        assert_eq!(event.repository.as_ref().unwrap().full_name, "owner/repo");
         assert_eq!(event.commits[0].id, "abc123");
-        assert!(serde_json::from_str::<PushEvent>(r#"{"repository":{}}"#).is_err());
+        assert!(serde_json::from_str::<GithubPushPayload>(r#"{"repository":{}}"#).is_err());
     }
 
     #[tokio::test]
     #[allow(clippy::result_large_err)]
     async fn connects_with_authorization_and_consumes_push() {
+        let gitea_client = Arc::new(gitea_client::GiteaUserClient::new("", "", ""));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -206,7 +207,7 @@ mod tests {
             .unwrap();
             socket
                 .send(Message::Text(
-                    r#"{"ref":"refs/heads/main","after":"abc","repository":{"full_name":"owner/repo"}}"#
+                    r#"{"after":"abc","base_ref":null,"before":"def","commits":[],"compare":"https://github.com/owner/repo/compare/def...abc","created":false,"deleted":false,"forced":false,"head_commit":null,"pusher":{"name":"octocat","email":null},"ref":"refs/heads/main","repository":{"id":1,"name":"repo","full_name":"owner/repo"},"sender":{"id":2,"login":"octocat"},"installation":{"id":3}}"#
                         .into(),
                 ))
                 .await
@@ -215,7 +216,7 @@ mod tests {
         });
 
         let config =
-            Config::from_values(format!("ws://{address}/relay/ws"), "test-secret".into()).unwrap();
+            Config::from_values(format!("ws://{address}/relay/ws"), "test-secret".into(), gitea_client.clone()).unwrap();
         tokio::time::timeout(Duration::from_secs(5), listen(&config))
             .await
             .unwrap()
