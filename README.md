@@ -1,2 +1,2 @@
-# github-relay-cloudflare 
+# github-relay-cloudflare  
 A relay system for using a cloudflare worker to receive github 'push' event webhooks and relay them to a private server over a websocket \([githook-relay-worker](./githook-relay-worker/README.md)\). The receiving program instructs gitea to sync the repository mirror immediately after a push \([gitea-notifier](./gitea-notifier/README.md)\).
