@@ -1,0 +1,27 @@
+{
+  "name": "cloudflare-relay-access-policy-terraform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "scripts": {
+    "plan": "node deploy.mjs plan",
+    "deploy": "node deploy.mjs deploy",
+    "dry-run": "node deploy.mjs dry-run",
+    "verify": "node deploy.mjs verify",
+    "test": "node --test deploy.test.mjs",
+    "test:worker": "node --test tests/worker-runtime.mjs"
+  },
+  "dependencies": {
+    "smol-toml": "1.9.1"
+  },
+  "devDependencies": {
+    "wrangler": "4.151.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261012.1": true
+  }
+}

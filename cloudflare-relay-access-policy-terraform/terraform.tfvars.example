@@ -1,0 +1,19 @@
+# Use this only for direct Terraform operation, not alongside the .env wrapper.
+# Worker build/deployment, secret upload and discovery are performed by deploy.mjs.
+cloudflare_account_id = "0123456789abcdef0123456789abcdef"
+hostname              = "relay.example.com"
+worker_name           = "githook-relay-worker"
+endpoint_mode         = "custom_domain"
+cloudflare_zone_id    = "abcdef0123456789abcdef0123456789"
+gitea_server_public_ips = [
+  "203.0.113.10",
+  "2001:db8::/48",
+]
+
+# Copy the complete endpoints default from variables.tf to customize names/paths.
+# Explicit adoption is available when using Terraform without the wrapper:
+# existing_resources = {
+#   access_lists = { github = "<zero-trust-list-id>", gitea = "<zero-trust-list-id>" }
+#   policies     = { github = "<policy-id>", gitea = "<policy-id>" }
+#   applications = { github = "<application-id>", gitea = "<application-id>" }
+# }

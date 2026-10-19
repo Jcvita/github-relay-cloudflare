@@ -3,5 +3,13 @@
         "gitea-notifier/Cargo.toml",
         "githook-relay-worker/Cargo.toml",
         "github-webhooks-structs/Cargo.toml"
+    ],
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "standard",
+    "python.analysis.languageServerMode": "full",
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python.defaultInterpreterPath": "${workspaceFolder}\\cloudflare-relay-access-policy-script\\.venv\\Scripts\\python.exe",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}\\cloudflare-relay-access-policy-script"
     ]
 }

@@ -5,9 +5,63 @@ pub mod github_webhook;
 use github_webhook::GithubWebhookRequestValidator;
 use github_webhooks_structs::GithubWebhookPayload;
 
-const PUSH_WEBHOOK_PATH: &str = "/webhooks/github/push";
-const WEBSOCKET_PATH: &str = "/relay/ws";
 const BROADCAST_OBJECT_NAME: &str = "github-push-broadcast";
+
+#[derive(Debug, PartialEq)]
+enum RelayRoute {
+    Webhook,
+    WebSocket,
+}
+
+struct RelayPaths {
+    webhook: String,
+    websocket: String,
+}
+
+impl RelayPaths {
+    fn from_env(env: &Env) -> Result<Self> {
+        Self::new(
+            env.var("CLOUDFLARE_GITHUB_ACCESS_APPLICATION_PATH")?.to_string(),
+            env.var("CLOUDFLARE_GITEA_ACCESS_APPLICATION_PATH")?.to_string(),
+        )
+    }
+
+    fn new(webhook: String, websocket: String) -> Result<Self> {
+        if !valid_relay_path(&webhook)
+            || !valid_relay_path(&websocket)
+            || webhook == websocket
+            || webhook.starts_with(&format!("{websocket}/"))
+            || websocket.starts_with(&format!("{webhook}/"))
+        {
+            return Err(Error::RustError(
+                "Relay paths must be canonical, non-root, distinct and non-nested".into(),
+            ));
+        }
+        Ok(Self { webhook, websocket })
+    }
+
+    fn route(&self, path: &str) -> Option<RelayRoute> {
+        if path == self.webhook {
+            Some(RelayRoute::Webhook)
+        } else if path == self.websocket {
+            Some(RelayRoute::WebSocket)
+        } else {
+            None
+        }
+    }
+}
+
+fn valid_relay_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path[1..].split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != "."
+                && segment != ".."
+                && segment.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~')
+                })
+        })
+}
 
 #[durable_object]
 pub struct GithubHookRelay {
@@ -21,20 +75,27 @@ impl DurableObject for GithubHookRelay {
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
-        match req.path().as_str() {
-            PUSH_WEBHOOK_PATH => {
+        let paths = match RelayPaths::from_env(&self.env) {
+            Ok(paths) => paths,
+            Err(error) => {
+                console_error!("Invalid relay path configuration: {}", error);
+                return Response::error("Invalid relay path configuration", 500);
+            }
+        };
+        match paths.route(&req.path()) {
+            Some(RelayRoute::Webhook) => {
                 if req.method() != Method::Post {
                     return Response::error("Method not allowed", 405);
                 }
                 self.handle_webhook(&mut req).await
             }
-            WEBSOCKET_PATH => {
+            Some(RelayRoute::WebSocket) => {
                 if req.method() != Method::Get {
                     return Response::error("Method not allowed", 405);
                 }
                 self.handle_websocket(&req)
             }
-            _ => Response::error("Not found", 404),
+            None => Response::error("Not found", 404),
         }
     }
 
@@ -122,15 +183,22 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if path == "/" && req.method() == Method::Get {
         return Response::ok("Hello Axum!");
     }
-    match path.as_str() {
-        PUSH_WEBHOOK_PATH if req.method() != Method::Post => {
+    let paths = match RelayPaths::from_env(&env) {
+        Ok(paths) => paths,
+        Err(error) => {
+            console_error!("Invalid relay path configuration: {}", error);
+            return Response::error("Invalid relay path configuration", 500);
+        }
+    };
+    match paths.route(&path) {
+        Some(RelayRoute::Webhook) if req.method() != Method::Post => {
             return Response::error("Method not allowed", 405);
         }
-        WEBSOCKET_PATH if req.method() != Method::Get => {
+        Some(RelayRoute::WebSocket) if req.method() != Method::Get => {
             return Response::error("Method not allowed", 405);
         }
-        PUSH_WEBHOOK_PATH | WEBSOCKET_PATH => {}
-        _ => return Response::error("Not found", 404),
+        Some(_) => {}
+        None => return Response::error("Not found", 404),
     }
 
     let namespace = env.durable_object("GITHUB_HOOK_RELAY")?;
@@ -140,7 +208,42 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::authorized;
+    use super::{authorized, valid_relay_path, RelayPaths, RelayRoute};
+
+    #[test]
+    fn configured_paths_replace_default_routes() {
+        let paths = RelayPaths::new("/custom/github".into(), "/custom/socket".into()).unwrap();
+        assert_eq!(paths.route("/custom/github"), Some(RelayRoute::Webhook));
+        assert_eq!(paths.route("/custom/socket"), Some(RelayRoute::WebSocket));
+        assert_eq!(paths.route("/relay/webhooks/github/push"), None);
+        assert_eq!(paths.route("/relay/ws"), None);
+        assert_eq!(paths.route("/custom/github/extra"), None);
+        assert_eq!(paths.route("/custom/socket/"), None);
+    }
+
+    #[test]
+    fn paths_reject_ambiguous_url_forms() {
+        for path in [
+            "", "/", "relative", "//hook", "/hook/", "/hook//push", "/a/./b",
+            "/a/../b", "/hook?x=1", "/hook#fragment", "/hook*", "/a%2fb",
+            "/a\\b", "/has space", "/caf\u{e9}",
+        ] {
+            assert!(!valid_relay_path(path), "Accepted invalid path: {path}");
+        }
+        assert!(valid_relay_path("/hooks/github.push_v2-~"));
+    }
+
+    #[test]
+    fn paths_must_be_distinct_and_non_nested() {
+        for (webhook, websocket) in [
+            ("/same", "/same"),
+            ("/relay", "/relay/ws"),
+            ("/relay/hook", "/relay"),
+        ] {
+            assert!(RelayPaths::new(webhook.into(), websocket.into()).is_err());
+        }
+        assert!(RelayPaths::new("/hook".into(), "/hooks".into()).is_ok());
+    }
 
     #[test]
     fn websocket_requires_matching_bearer_secret() {
